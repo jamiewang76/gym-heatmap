@@ -53,7 +53,9 @@ export function useCheckin(overrideCoords?: { lat: number; lng: number } | null)
   useEffect(() => {
     let uuid = localStorage.getItem(DEVICE_UUID_KEY);
     if (!uuid) {
-      uuid = crypto.randomUUID();
+      uuid = typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : Array.from({ length: 16 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, "0")).join("-");
       localStorage.setItem(DEVICE_UUID_KEY, uuid);
     }
     deviceUuid.current = uuid;
