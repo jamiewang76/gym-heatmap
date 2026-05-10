@@ -14,7 +14,6 @@ export type CheckInStatus =
   | "already_checked_in"
   | "gym_not_found"
   | "blocked"
-  | "verification_unavailable"
   | "location_denied"
   | "error";
 
@@ -25,10 +24,77 @@ export interface CheckInResult {
   successStateId?: string;
 }
 
+interface GymMatch {
+  found: boolean;
+  name: string | null;
+  gymLat: number | null;
+  gymLng: number | null;
+  osmType: string | null;
+  osmId: number | null;
+}
+
 function msToDisplay(ms: number): string {
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+// Runs in the browser — residential/mobile IPs are allowed by Overpass
+async function queryOverpass(lat: number, lng: number): Promise<GymMatch> {
+  const query =
+    `[out:json][timeout:10];` +
+    `(node[leisure=fitness_centre](around:50,${lat},${lng});` +
+    `node[amenity=gym](around:50,${lat},${lng});` +
+    `way[leisure=fitness_centre](around:50,${lat},${lng});` +
+    `way[amenity=gym](around:50,${lat},${lng});` +
+    `);out center 1;`;
+
+  const mirrors = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
+  ];
+
+  for (const mirror of mirrors) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 12000);
+      const res = await fetch(mirror, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      if (!data.elements?.length) {
+        return { found: false, name: null, gymLat: null, gymLng: null, osmType: null, osmId: null };
+      }
+
+      const el = data.elements[0];
+      const gymLat: number = el.type === "way" ? el.center?.lat : el.lat;
+      const gymLng: number = el.type === "way" ? el.center?.lon : el.lon;
+      const gymName: string | null = el.tags?.name ?? null;
+
+      console.log(
+        `[Global Gains] ✅ Gym found — "${gymName ?? "unnamed"}" | ` +
+        `OSM ${el.type}/${el.id} | gym: ${gymLat}, ${gymLng} | ` +
+        `your GPS: ${lat}, ${lng} | ` +
+        `https://www.openstreetmap.org/${el.type}/${el.id}`
+      );
+
+      return { found: true, name: gymName, gymLat, gymLng, osmType: el.type, osmId: el.id };
+    } catch {
+      // mirror unreachable, try next
+    }
+  }
+
+  // All mirrors failed from this browser — treat as unverified but don't block
+  console.warn(`[Global Gains] ⚠️ Overpass unreachable from browser, proceeding unverified | GPS: ${lat}, ${lng}`);
+  return { found: true, name: null, gymLat: null, gymLng: null, osmType: null, osmId: null };
 }
 
 export function useCheckin() {
@@ -63,8 +129,8 @@ export function useCheckin() {
     setIsChecking(true);
 
     try {
+      // Step 1: GPS
       setResult({ status: "requesting_location", message: "requesting location..." });
-
       let lat: number, lng: number;
       try {
         const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
@@ -78,8 +144,8 @@ export function useCheckin() {
         return;
       }
 
+      // Step 2: Reverse geocode state
       setResult({ status: "finding_gym", message: "finding your gym..." });
-
       let stateId: string;
       try {
         const geo = await fetch(
@@ -98,47 +164,40 @@ export function useCheckin() {
         return;
       }
 
+      // Step 3: Gym detection — runs in browser, not on server
+      const gym = await queryOverpass(lat, lng);
+      if (!gym.found) {
+        setResult({ status: "gym_not_found", message: "Gym not detected. Get to the gym to light up your city!" });
+        setIsChecking(false);
+        return;
+      }
+
+      // Step 4: Record check-in on server (rate limiting + DB write)
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
       const res = await fetch(`${supabaseUrl}/functions/v1/check-in`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${supabaseKey}`,
-        },
-        body: JSON.stringify({ lat, lng, deviceUuid: deviceUuid.current, stateId }),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${supabaseKey}` },
+        body: JSON.stringify({
+          lat, lng, deviceUuid: deviceUuid.current, stateId,
+          gymName: gym.name, gymLat: gym.gymLat, gymLng: gym.gymLng,
+          osmType: gym.osmType, osmId: gym.osmId,
+        }),
       });
       const data = await res.json();
-
-      // Debug: log detected gym details to browser console
-      if (data.isGym && (data.gymLat || data.gymName)) {
-        console.log(
-          `[Global Gains] Gym detected — name: "${data.gymName ?? "unnamed"}" | ` +
-          `OSM ${data.osmType} #${data.osmId} | ` +
-          `gym coords: ${data.gymLat}, ${data.gymLng} | ` +
-          `your coords: ${lat}, ${lng} | ` +
-          `https://www.openstreetmap.org/${data.osmType}/${data.osmId}`
-        );
-      }
 
       if (data.blocked) {
         const until = new Date(data.retryAt);
         const remaining = until.getTime() - Date.now();
         localStorage.setItem(LAST_CHECKIN_KEY, (until.getTime() - COOLDOWN_MS).toString());
-        setResult({
-          status: "blocked",
-          message: msToDisplay(remaining),
-          blockedUntil: until,
-        });
-      } else if (data.error === "verification_unavailable") {
-        setResult({ status: "verification_unavailable", message: "Couldn't reach gym database. Try again." });
-      } else if (!data.isGym) {
-        setResult({ status: "gym_not_found", message: "Gym not detected. Get to the gym to light up your city!" });
+        setResult({ status: "blocked", message: msToDisplay(remaining), blockedUntil: until });
+      } else if (!data.ok) {
+        setResult({ status: "error", message: "Something went wrong. Try again." });
       } else {
         localStorage.setItem(LAST_CHECKIN_KEY, Date.now().toString());
         setResult({
           status: "success",
-          message: data.gymName ? `✓ Locked in at ${data.gymName}` : "✓ Locked In",
+          message: gym.name ? `✓ Locked in at ${gym.name}` : "✓ Locked In",
           successStateId: data.stateId || stateId,
         });
       }
