@@ -115,6 +115,14 @@ export default function DebugPanel({ onSetCoords, activeCoords }: Props) {
             </div>
           </div>
 
+          {/* Reset checkin cache */}
+          <button
+            onClick={() => { localStorage.removeItem("gg_last_checkin"); localStorage.removeItem("gg_device_uuid"); alert("checkin cache cleared"); }}
+            className="w-full bg-[#1a1a1a] border border-red-800 text-red-400 py-1"
+          >
+            clear checkin cache
+          </button>
+
           {/* Actions */}
           <div className="flex gap-2">
             <button

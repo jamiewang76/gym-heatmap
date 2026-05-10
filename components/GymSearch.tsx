@@ -15,7 +15,8 @@ interface Props {
 }
 
 function fmtDist(m: number): string {
-  return m < 1000 ? `${Math.round(m)}m` : `${(m / 1000).toFixed(1)}km`;
+  const ft = m * 3.28084;
+  return ft < 5280 ? `${Math.round(ft)} ft` : `${(ft / 5280).toFixed(1)} mi`;
 }
 
 function distCls(m: number): string {
@@ -35,10 +36,11 @@ export default function GymSearch({
   onCancel,
 }: Props) {
   const [query, setQuery] = useState("");
+  const [resultsCollapsed, setResultsCollapsed] = useState(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isVerifying = status === "verifying";
   const isTooFar = status === "too_far";
-  const canVerify = selectedGym != null && selectedGym.distanceM <= 5000;
+  const canVerify = selectedGym != null && selectedGym.distanceM <= 200;
 
   // Debounce search on query change (skip initial mount — already triggered by checkIn)
   const mounted = useRef(false);
@@ -50,6 +52,10 @@ export default function GymSearch({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
+  useEffect(() => {
+    if (selectedGym) setResultsCollapsed(true);
+  }, [selectedGym]);
+
   return (
     <div className="w-full space-y-2">
       {/* Search input */}
@@ -57,7 +63,7 @@ export default function GymSearch({
         <input
           type="text"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => { setQuery(e.target.value); setResultsCollapsed(false); }}
           placeholder="Search your gym..."
           autoFocus
           className="w-full bg-[#1a1a1a] border border-[#C5A059] text-white px-4 py-3 text-sm outline-none placeholder-[#444] font-mono"
@@ -70,7 +76,7 @@ export default function GymSearch({
       </div>
 
       {/* Results */}
-      {results.length > 0 && (
+      {results.length > 0 && !resultsCollapsed && (
         <div className="max-h-44 overflow-y-auto border border-[#2a2a2a] divide-y divide-[#1e1e1e]">
           {results.map((gym) => {
             const selected = selectedGym?.id === gym.id;
