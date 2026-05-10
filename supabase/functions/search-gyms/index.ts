@@ -20,9 +20,8 @@ Deno.serve(async (req) => {
     const params = new URLSearchParams({
       ll: `${lat},${lng}`,
       radius: "5000",
-      categories: "18011,18021,18029",
       limit: "8",
-      fields: "fsq_id,name,geocodes,location,distance",
+      fsq_category_ids: "4bf58dd8d48988d175941735",
     });
     if (query?.trim()) params.set("query", query.trim());
 
@@ -57,17 +56,13 @@ Deno.serve(async (req) => {
       return json({ results: [] });
     }
 
-    if (data.results?.length) {
-      console.log("FSQ first result:", JSON.stringify(data.results[0]));
-    }
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const results = (data.results ?? []).map((p: any) => ({
-      id: p.fsq_id,
+      id: p.fsq_place_id,
       name: p.name,
       address: p.location?.formatted_address ?? "",
-      lat: p.geocodes?.main?.latitude ?? null,
-      lng: p.geocodes?.main?.longitude ?? null,
+      lat: p.latitude ?? null,
+      lng: p.longitude ?? null,
       distanceM: p.distance ?? 0,
     }));
 
