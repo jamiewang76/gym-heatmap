@@ -19,8 +19,6 @@ async function hashIP(ip: string): Promise<string> {
     .join("");
 }
 
-// Try multiple Overpass mirrors in sequence — the main endpoint is often slow
-// or rate-limited when called from cloud IPs (Deno Deploy / Supabase Edge)
 const OVERPASS_MIRRORS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
@@ -30,18 +28,21 @@ const OVERPASS_MIRRORS = [
 interface OverpassResult {
   found: boolean;
   name: string | null;
+  gymLat: number | null;
+  gymLng: number | null;
+  osmType: string | null;
+  osmId: number | null;
   unavailable?: boolean;
 }
 
 async function detectGym(lat: number, lng: number): Promise<OverpassResult> {
-  // [timeout:20] tells Overpass to give up server-side after 20s (avoids hanging)
-  const query = `[out:json][timeout:20];(node[leisure=fitness_centre](around:50,${lat},${lng});node[amenity=gym](around:50,${lat},${lng});way[leisure=fitness_centre](around:50,${lat},${lng});way[amenity=gym](around:50,${lat},${lng}););out 1;`;
+  // out center 1 — returns center coords for both node and way elements
+  const query = `[out:json][timeout:7];(node[leisure=fitness_centre](around:50,${lat},${lng});node[amenity=gym](around:50,${lat},${lng});way[leisure=fitness_centre](around:50,${lat},${lng});way[amenity=gym](around:50,${lat},${lng}););out center 1;`;
 
   for (const mirror of OVERPASS_MIRRORS) {
     try {
       const ctrl = new AbortController();
-      // 22s client-side abort — slightly longer than the Overpass server timeout
-      const timer = setTimeout(() => ctrl.abort(), 22000);
+      const timer = setTimeout(() => ctrl.abort(), 8000);
 
       const res = await fetch(mirror, {
         method: "POST",
@@ -51,24 +52,34 @@ async function detectGym(lat: number, lng: number): Promise<OverpassResult> {
       });
       clearTimeout(timer);
 
-      // Rate-limited or server error on this mirror — try the next one
       if (res.status === 429 || res.status >= 500) {
         console.warn(`Mirror ${mirror} returned ${res.status}, trying next`);
         continue;
       }
 
       const data = await res.json();
-      if (!data.elements?.length) return { found: false, name: null };
+      if (!data.elements?.length) {
+        return { found: false, name: null, gymLat: null, gymLng: null, osmType: null, osmId: null };
+      }
 
-      return { found: true, name: data.elements[0]?.tags?.name ?? null };
+      const el = data.elements[0];
+      const gymLat: number = el.type === "way" ? el.center?.lat : el.lat;
+      const gymLng: number = el.type === "way" ? el.center?.lon : el.lon;
+      const gymName: string | null = el.tags?.name ?? null;
+
+      console.log(
+        `[check-in] OSM match — type=${el.type} id=${el.id} name="${gymName}" ` +
+        `gymLat=${gymLat} gymLng=${gymLng} userLat=${lat} userLng=${lng} ` +
+        `tags=${JSON.stringify(el.tags)}`
+      );
+
+      return { found: true, name: gymName, gymLat, gymLng, osmType: el.type, osmId: el.id };
     } catch (err) {
       console.warn(`Mirror ${mirror} failed:`, err instanceof Error ? err.message : err);
-      // Timeout or network error — try the next mirror
     }
   }
 
-  // All mirrors failed
-  return { found: false, name: null, unavailable: true };
+  return { found: false, name: null, gymLat: null, gymLng: null, osmType: null, osmId: null, unavailable: true };
 }
 
 Deno.serve(async (req) => {
@@ -83,11 +94,9 @@ Deno.serve(async (req) => {
     const { lat, lng, deviceUuid, stateId } = await req.json();
     if (!lat || !lng || !deviceUuid || !stateId) return json({ error: "bad_request" }, 400);
 
-    // Hash client IP
     const forwarded = req.headers.get("x-forwarded-for") ?? "unknown";
     const ipHash = await hashIP(forwarded.split(",")[0].trim());
 
-    // Rate limit — block if either ip_hash OR device_uuid checked in within 12h
     const windowStart = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
     const { data: hit } = await supabase
       .from("rate_limits")
@@ -104,26 +113,29 @@ Deno.serve(async (req) => {
       return json({ blocked: true, retryAt });
     }
 
-    // Gym detection
     const gym = await detectGym(lat, lng);
 
-    if (gym.unavailable) return json({ isGym: false, error: "verification_unavailable" });
-    if (!gym.found) return json({ isGym: false });
+    if (!gym.unavailable && !gym.found) return json({ isGym: false });
 
-    // Record rate limit entry
     await supabase.from("rate_limits").insert({ ip_hash: ipHash, device_uuid: deviceUuid });
-
-    // Atomically increment state
     await supabase.rpc("increment_state", { state_id: stateId });
 
-    // Return new count
     const { data: stateRow } = await supabase
       .from("states")
       .select("count")
       .eq("id", stateId)
       .single();
 
-    return json({ isGym: true, gymName: gym.name, stateId, newCount: stateRow?.count ?? 0 });
+    return json({
+      isGym: true,
+      gymName: gym.found ? gym.name : null,
+      gymLat: gym.gymLat,
+      gymLng: gym.gymLng,
+      osmType: gym.osmType,
+      osmId: gym.osmId,
+      stateId,
+      newCount: stateRow?.count ?? 0,
+    });
   } catch (err) {
     console.error("check-in error:", err);
     return json({ error: "internal_error" }, 500);

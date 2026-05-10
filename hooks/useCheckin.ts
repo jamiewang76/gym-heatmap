@@ -110,6 +110,17 @@ export function useCheckin() {
       });
       const data = await res.json();
 
+      // Debug: log detected gym details to browser console
+      if (data.isGym && (data.gymLat || data.gymName)) {
+        console.log(
+          `[Global Gains] Gym detected — name: "${data.gymName ?? "unnamed"}" | ` +
+          `OSM ${data.osmType} #${data.osmId} | ` +
+          `gym coords: ${data.gymLat}, ${data.gymLng} | ` +
+          `your coords: ${lat}, ${lng} | ` +
+          `https://www.openstreetmap.org/${data.osmType}/${data.osmId}`
+        );
+      }
+
       if (data.blocked) {
         const until = new Date(data.retryAt);
         const remaining = until.getTime() - Date.now();
