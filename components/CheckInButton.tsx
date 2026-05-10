@@ -28,11 +28,11 @@ export default function CheckInButton({ result, onCheckIn }: Props) {
     return () => clearInterval(id);
   }, [status]);
 
-  const isLoading = status === "requesting_location" || status === "finding_gym";
+  const isLoading = status === "requesting_location";
   const isLocked = status === "already_checked_in" || status === "blocked";
   const isSuccess = status === "success";
   const isDisabled = isLoading || isLocked || isSuccess;
-  const isError = ["gym_not_found", "verification_unavailable", "location_denied", "error"].includes(status);
+  const isError = ["location_denied", "error"].includes(status);
 
   let btnText = "⚡ I'm Locked In";
   let btnCls = "bg-[#C5A059] text-[#121212]";

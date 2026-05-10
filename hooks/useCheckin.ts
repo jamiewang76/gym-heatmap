@@ -9,13 +9,24 @@ const COOLDOWN_MS = 12 * 60 * 60 * 1000;
 export type CheckInStatus =
   | "idle"
   | "requesting_location"
-  | "finding_gym"
+  | "searching"
+  | "gym_selected"
+  | "verifying"
   | "success"
   | "already_checked_in"
-  | "gym_not_found"
+  | "too_far"
   | "blocked"
   | "location_denied"
   | "error";
+
+export interface GymResult {
+  id: string;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  distanceM: number;
+}
 
 export interface CheckInResult {
   status: CheckInStatus;
@@ -24,83 +35,19 @@ export interface CheckInResult {
   successStateId?: string;
 }
 
-interface GymMatch {
-  found: boolean;
-  name: string | null;
-  gymLat: number | null;
-  gymLng: number | null;
-  osmType: string | null;
-  osmId: number | null;
-}
-
 function msToDisplay(ms: number): string {
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-// Runs in the browser — residential/mobile IPs are allowed by Overpass
-async function queryOverpass(lat: number, lng: number): Promise<GymMatch> {
-  const query =
-    `[out:json][timeout:10];` +
-    `(node[leisure=fitness_centre](around:50,${lat},${lng});` +
-    `node[amenity=gym](around:50,${lat},${lng});` +
-    `way[leisure=fitness_centre](around:50,${lat},${lng});` +
-    `way[amenity=gym](around:50,${lat},${lng});` +
-    `);out center 1;`;
-
-  // overpass-api.de blocks CORS from production browser origins — omit it here.
-  // These mirrors send Access-Control-Allow-Origin headers.
-  const mirrors = [
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
-  ];
-
-  for (const mirror of mirrors) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 12000);
-      const res = await fetch(mirror, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      if (!data.elements?.length) {
-        return { found: false, name: null, gymLat: null, gymLng: null, osmType: null, osmId: null };
-      }
-
-      const el = data.elements[0];
-      const gymLat: number = el.type === "way" ? el.center?.lat : el.lat;
-      const gymLng: number = el.type === "way" ? el.center?.lon : el.lon;
-      const gymName: string | null = el.tags?.name ?? null;
-
-      console.log(
-        `[Global Gains] ✅ Gym found — "${gymName ?? "unnamed"}" | ` +
-        `OSM ${el.type}/${el.id} | gym: ${gymLat}, ${gymLng} | ` +
-        `your GPS: ${lat}, ${lng} | ` +
-        `https://www.openstreetmap.org/${el.type}/${el.id}`
-      );
-
-      return { found: true, name: gymName, gymLat, gymLng, osmType: el.type, osmId: el.id };
-    } catch {
-      // mirror unreachable, try next
-    }
-  }
-
-  // All mirrors failed from this browser — treat as unverified but don't block
-  console.warn(`[Global Gains] ⚠️ Overpass unreachable from browser, proceeding unverified | GPS: ${lat}, ${lng}`);
-  return { found: true, name: null, gymLat: null, gymLng: null, osmType: null, osmId: null };
-}
-
-export function useCheckin() {
+export function useCheckin(overrideCoords?: { lat: number; lng: number } | null) {
   const [result, setResult] = useState<CheckInResult>({ status: "idle", message: "" });
-  const [isChecking, setIsChecking] = useState(false);
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [stateId, setStateId] = useState<string>("");
+  const [searchResults, setSearchResults] = useState<GymResult[]>([]);
+  const [selectedGym, setSelectedGym] = useState<GymResult | null>(null);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
   const deviceUuid = useRef("");
 
   useEffect(() => {
@@ -115,24 +62,26 @@ export function useCheckin() {
     if (lastMs) {
       const elapsed = Date.now() - lastMs;
       if (elapsed < COOLDOWN_MS) {
-        const remaining = COOLDOWN_MS - elapsed;
         setResult({
           status: "already_checked_in",
-          message: msToDisplay(remaining),
+          message: msToDisplay(COOLDOWN_MS - elapsed),
           blockedUntil: new Date(lastMs + COOLDOWN_MS),
         });
       }
     }
   }, []);
 
+  // ── Step 1: get GPS + state, open search UI ─────────────────────────────────
   async function checkIn() {
-    if (isChecking || result.status === "success" || result.status === "already_checked_in") return;
-    setIsChecking(true);
+    if (result.status === "already_checked_in" || result.status === "success") return;
 
-    try {
-      // Step 1: GPS
-      setResult({ status: "requesting_location", message: "requesting location..." });
-      let lat: number, lng: number;
+    setResult({ status: "requesting_location", message: "requesting location..." });
+
+    let lat: number, lng: number;
+    if (overrideCoords) {
+      lat = overrideCoords.lat;
+      lng = overrideCoords.lng;
+    } else {
       try {
         const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
           navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000 })
@@ -141,73 +90,140 @@ export function useCheckin() {
         lng = pos.coords.longitude;
       } catch {
         setResult({ status: "location_denied", message: "Enable location to check in" });
-        setIsChecking(false);
         return;
       }
+    }
 
-      // Step 2: Reverse geocode state
-      setResult({ status: "finding_gym", message: "finding your gym..." });
-      let stateId: string;
-      try {
-        const geo = await fetch(
-          `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`
-        ).then((r) => r.json());
-        const code: string = geo.principalSubdivisionCode ?? "";
-        if (!code.startsWith("US-")) {
-          setResult({ status: "gym_not_found", message: "Gym not detected. Get to the gym to light up your city!" });
-          setIsChecking(false);
-          return;
+    // Reverse geocode state
+    try {
+      const geo = await fetch(
+        `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`
+      ).then((r) => r.json());
+      const code: string = geo.principalSubdivisionCode ?? "";
+      if (!code.startsWith("US-")) {
+        setResult({ status: "error", message: "Must be in the US to check in." });
+        return;
+      }
+      setStateId(code.replace("US-", ""));
+    } catch {
+      setResult({ status: "error", message: "Couldn't determine your location. Try again." });
+      return;
+    }
+
+    setUserCoords({ lat, lng });
+    setSelectedGym(null);
+    setResult({ status: "searching", message: "" });
+    doSearch(lat, lng, "");
+  }
+
+  // ── Gym search (called by GymSearch component via debounce) ─────────────────
+  async function doSearch(lat: number, lng: number, query: string) {
+    setIsSearchLoading(true);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/search-gyms`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ lat, lng, query }),
         }
-        stateId = code.replace("US-", "");
-      } catch {
-        setResult({ status: "error", message: "Couldn't determine your location. Try again." });
-        setIsChecking(false);
-        return;
-      }
+      );
+      const data = await res.json();
+      setSearchResults(data.results ?? []);
+    } catch {
+      setSearchResults([]);
+    } finally {
+      setIsSearchLoading(false);
+    }
+  }
 
-      // Step 3: Gym detection — runs in browser, not on server
-      const gym = await queryOverpass(lat, lng);
-      if (!gym.found) {
-        setResult({ status: "gym_not_found", message: "Gym not detected. Get to the gym to light up your city!" });
-        setIsChecking(false);
-        return;
-      }
+  function searchGyms(query: string) {
+    if (!userCoords) return;
+    doSearch(userCoords.lat, userCoords.lng, query);
+  }
 
-      // Step 4: Record check-in on server (rate limiting + DB write)
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const res = await fetch(`${supabaseUrl}/functions/v1/check-in`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${supabaseKey}` },
-        body: JSON.stringify({
-          lat, lng, deviceUuid: deviceUuid.current, stateId,
-          gymName: gym.name, gymLat: gym.gymLat, gymLng: gym.gymLng,
-          osmType: gym.osmType, osmId: gym.osmId,
-        }),
-      });
+  // ── Step 2: user picks a gym ────────────────────────────────────────────────
+  function selectGym(gym: GymResult) {
+    setSelectedGym(gym);
+    setResult({ status: "gym_selected", message: "" });
+  }
+
+  // ── Step 3: verify distance + record check-in ────────────────────────────────
+  async function verifyCheckin() {
+    if (!userCoords || !selectedGym || result.status === "verifying") return;
+    setResult({ status: "verifying", message: "" });
+
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/check-in`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            lat: userCoords.lat,
+            lng: userCoords.lng,
+            deviceUuid: deviceUuid.current,
+            stateId,
+            gymLat: selectedGym.lat,
+            gymLng: selectedGym.lng,
+            gymName: selectedGym.name,
+          }),
+        }
+      );
       const data = await res.json();
 
       if (data.blocked) {
         const until = new Date(data.retryAt);
-        const remaining = until.getTime() - Date.now();
         localStorage.setItem(LAST_CHECKIN_KEY, (until.getTime() - COOLDOWN_MS).toString());
-        setResult({ status: "blocked", message: msToDisplay(remaining), blockedUntil: until });
+        setResult({
+          status: "blocked",
+          message: msToDisplay(until.getTime() - Date.now()),
+          blockedUntil: until,
+        });
+      } else if (data.verified === false) {
+        setResult({
+          status: "too_far",
+          message: `${Math.round(data.distanceM)}m away — server says you're too far`,
+        });
       } else if (!data.ok) {
         setResult({ status: "error", message: "Something went wrong. Try again." });
       } else {
         localStorage.setItem(LAST_CHECKIN_KEY, Date.now().toString());
         setResult({
           status: "success",
-          message: gym.name ? `Clocked into ${gym.name}! glhf` : "",
+          message: `Clocked into ${selectedGym.name}! glhf`,
           successStateId: data.stateId || stateId,
         });
       }
     } catch {
       setResult({ status: "error", message: "Something went wrong. Try again." });
-    } finally {
-      setIsChecking(false);
     }
   }
 
-  return { result, checkIn };
+  function cancelSearch() {
+    setUserCoords(null);
+    setSearchResults([]);
+    setSelectedGym(null);
+    setStateId("");
+    setResult({ status: "idle", message: "" });
+  }
+
+  return {
+    result,
+    userCoords,
+    searchResults,
+    selectedGym,
+    isSearchLoading,
+    checkIn,
+    searchGyms,
+    selectGym,
+    verifyCheckin,
+    cancelSearch,
+  };
 }

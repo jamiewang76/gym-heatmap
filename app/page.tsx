@@ -6,16 +6,34 @@ import CountdownTimer from "@/components/CountdownTimer";
 import CheckInButton from "@/components/CheckInButton";
 import StateBottomSheet from "@/components/StateBottomSheet";
 import LeaderboardPanel from "@/components/LeaderboardPanel";
+import GymSearch from "@/components/GymSearch";
 import { useStateCounts } from "@/hooks/useStateCounts";
 import { useLeaderboard } from "@/hooks/useLeaderboard";
 import { useCheckin } from "@/hooks/useCheckin";
 
 const USMap = dynamic(() => import("@/components/USMap"), { ssr: false });
+const DebugPanel = process.env.NODE_ENV === "development"
+  ? dynamic(() => import("@/components/DebugPanel"), { ssr: false })
+  : null;
 
 export default function Home() {
+  const [debugCoords, setDebugCoords] = useState<{ lat: number; lng: number } | null>(null);
+
   const { stateCounts, totalCount } = useStateCounts();
   const { entries } = useLeaderboard();
-  const { result, checkIn } = useCheckin();
+  const {
+    result,
+    searchResults,
+    selectedGym,
+    isSearchLoading,
+    checkIn,
+    searchGyms,
+    selectGym,
+    verifyCheckin,
+    cancelSearch,
+  } = useCheckin(debugCoords);
+
+  const isInSearchFlow = ["searching", "gym_selected", "verifying", "too_far"].includes(result.status);
 
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
@@ -70,7 +88,20 @@ export default function Home() {
       </p>
 
       {/* Check-in */}
-      <CheckInButton result={result} onCheckIn={checkIn} />
+      {isInSearchFlow ? (
+        <GymSearch
+          results={searchResults}
+          selectedGym={selectedGym}
+          isLoading={isSearchLoading}
+          status={result.status}
+          onSearch={searchGyms}
+          onSelect={selectGym}
+          onVerify={verifyCheckin}
+          onCancel={cancelSearch}
+        />
+      ) : (
+        <CheckInButton result={result} onCheckIn={checkIn} />
+      )}
 
       {/* Panels */}
       {selectedState && (
@@ -82,6 +113,10 @@ export default function Home() {
       )}
       {showLeaderboard && (
         <LeaderboardPanel entries={entries} onClose={() => setShowLeaderboard(false)} />
+      )}
+
+      {DebugPanel && (
+        <DebugPanel onSetCoords={setDebugCoords} activeCoords={debugCoords} />
       )}
     </main>
   );
