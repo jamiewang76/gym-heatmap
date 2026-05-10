@@ -26,23 +26,40 @@ Deno.serve(async (req) => {
     });
     if (query?.trim()) params.set("query", query.trim());
 
-    const fsqKey = Deno.env.get("FSQ_API_KEY")!;
+    const fsqKey = Deno.env.get("FSQ_API_KEY");
+    if (!fsqKey) {
+      console.error("FSQ_API_KEY secret is not set");
+      return json({ results: [] });
+    }
+
     const res = await fetch(
       `https://places-api.foursquare.com/places/search?${params}`,
       {
         headers: {
-          Authorization: `fsq3${fsqKey}`,
+          Authorization: `Bearer ${fsqKey}`,
+          "X-Places-Api-Version": "2025-06-17",
           Accept: "application/json",
         },
       }
     );
 
     if (!res.ok) {
-      console.error(`Foursquare ${res.status}: ${await res.text()}`);
+      const body = await res.text().catch(() => "(unreadable)");
+      console.error(`Foursquare ${res.status}: ${body}`);
       return json({ results: [] });
     }
 
-    const data = await res.json();
+    let data: { results?: unknown[] };
+    try {
+      data = await res.json();
+    } catch {
+      console.error("Foursquare non-JSON response");
+      return json({ results: [] });
+    }
+
+    if (data.results?.length) {
+      console.log("FSQ first result:", JSON.stringify(data.results[0]));
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const results = (data.results ?? []).map((p: any) => ({

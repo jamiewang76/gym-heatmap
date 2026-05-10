@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\jamie\\\\gym-heatmap\" -Force -Recurse | Where-Object { !$_.PSIsContainer } | Select-Object FullName)"
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\jamie\\\\gym-heatmap\" -Force -Recurse | Where-Object { !$_.PSIsContainer } | Select-Object FullName)",
+      "WebFetch(domain:docs.foursquare.com)",
+      "WebSearch",
+      "WebFetch(domain:location.foursquare.com)",
+      "WebFetch(domain:www.postman.com)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }
