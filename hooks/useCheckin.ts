@@ -49,10 +49,11 @@ async function queryOverpass(lat: number, lng: number): Promise<GymMatch> {
     `way[amenity=gym](around:50,${lat},${lng});` +
     `);out center 1;`;
 
+  // overpass-api.de blocks CORS from production browser origins — omit it here.
+  // These mirrors send Access-Control-Allow-Origin headers.
   const mirrors = [
-    "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://lz4.overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
   ];
 
   for (const mirror of mirrors) {
