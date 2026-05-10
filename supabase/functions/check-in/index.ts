@@ -52,26 +52,33 @@ Deno.serve(async (req) => {
       return json({ blocked: true, retryAt });
     }
 
-    // Gym detection via Overpass
-    const overpassQuery = `[out:json];(node[leisure=fitness_centre](around:200,${lat},${lng});node[amenity=gym](around:200,${lat},${lng}););out;`;
-    const overpassUrl = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
+    // Gym detection via Overpass — POST is more reliable than GET for this API
+    const overpassQuery = `[out:json][timeout:25];(node[leisure=fitness_centre](around:200,${lat},${lng});node[amenity=gym](around:200,${lat},${lng});way[leisure=fitness_centre](around:200,${lat},${lng});way[amenity=gym](around:200,${lat},${lng}););out 1;`;
 
     let gymName: string | null = null;
     try {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 10000);
-      const res = await fetch(overpassUrl, { signal: ctrl.signal });
+      const timer = setTimeout(() => ctrl.abort(), 28000);
+
+      const res = await fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `data=${encodeURIComponent(overpassQuery)}`,
+        signal: ctrl.signal,
+      });
       clearTimeout(timer);
 
-      if (res.status === 429) return json({ isGym: false, error: "verification_unavailable" });
+      if (res.status === 429 || res.status === 504) {
+        return json({ isGym: false, error: "verification_unavailable" });
+      }
 
       const data = await res.json();
       if (!data.elements?.length) return json({ isGym: false });
 
       gymName = data.elements[0]?.tags?.name ?? null;
     } catch (err) {
-      const isTimeout = err instanceof Error && err.name === "AbortError";
-      return json({ isGym: false, error: isTimeout ? "verification_unavailable" : "verification_unavailable" });
+      console.error("Overpass error:", err);
+      return json({ isGym: false, error: "verification_unavailable" });
     }
 
     // Record rate limit entry
