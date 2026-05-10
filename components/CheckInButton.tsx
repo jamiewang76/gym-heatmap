@@ -63,6 +63,9 @@ export default function CheckInButton({ result, onCheckIn }: Props) {
       {isError && (
         <p className="text-center text-sm mt-2 text-[#C5A059]">{message}</p>
       )}
+      {isSuccess && message && (
+        <p className="text-center text-sm mt-2 text-[#C5A059] tracking-wide">{message}</p>
+      )}
     </div>
   );
 }

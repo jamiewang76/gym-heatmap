@@ -198,7 +198,7 @@ export function useCheckin() {
         localStorage.setItem(LAST_CHECKIN_KEY, Date.now().toString());
         setResult({
           status: "success",
-          message: gym.name ? `✓ Locked in at ${gym.name}` : "✓ Locked In",
+          message: gym.name ? `Clocked into ${gym.name}! glhf` : "",
           successStateId: data.stateId || stateId,
         });
       }
