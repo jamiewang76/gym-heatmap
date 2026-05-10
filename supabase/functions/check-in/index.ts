@@ -35,7 +35,7 @@ interface OverpassResult {
 
 async function detectGym(lat: number, lng: number): Promise<OverpassResult> {
   // [timeout:20] tells Overpass to give up server-side after 20s (avoids hanging)
-  const query = `[out:json][timeout:20];(node[leisure=fitness_centre](around:200,${lat},${lng});node[amenity=gym](around:200,${lat},${lng});way[leisure=fitness_centre](around:200,${lat},${lng});way[amenity=gym](around:200,${lat},${lng}););out 1;`;
+  const query = `[out:json][timeout:20];(node[leisure=fitness_centre](around:50,${lat},${lng});node[amenity=gym](around:50,${lat},${lng});way[leisure=fitness_centre](around:50,${lat},${lng});way[amenity=gym](around:50,${lat},${lng}););out 1;`;
 
   for (const mirror of OVERPASS_MIRRORS) {
     try {
