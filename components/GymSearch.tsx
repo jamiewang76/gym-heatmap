@@ -40,7 +40,7 @@ export default function GymSearch({
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isVerifying = status === "verifying";
   const isTooFar = status === "too_far";
-  const canVerify = selectedGym != null && selectedGym.distanceM <= 5000;
+  const canVerify = selectedGym != null && selectedGym.distanceM <= 200;
 
   // Debounce search on query change (skip initial mount — already triggered by checkIn)
   const mounted = useRef(false);

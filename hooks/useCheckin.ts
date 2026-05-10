@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 
 const DEVICE_UUID_KEY = "gg_device_uuid";
 const LAST_CHECKIN_KEY = "gg_last_checkin";
-const COOLDOWN_MS = 1 * 60 * 1000;
+const COOLDOWN_MS = 12 * 60 * 60 * 1000;
 
 export type CheckInStatus =
   | "idle"

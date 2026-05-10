@@ -54,7 +54,7 @@ Deno.serve(async (req) => {
     // Rate limit — block if ip_hash OR device_uuid checked in within 12h
     const forwarded = req.headers.get("x-forwarded-for") ?? "unknown";
     const ipHash = await hashIP(forwarded.split(",")[0].trim());
-    const windowStart = new Date(Date.now() - 1 * 60 * 1000).toISOString();
+    const windowStart = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
 
     const { data: hit } = await supabase
       .from("rate_limits")
@@ -66,7 +66,7 @@ Deno.serve(async (req) => {
 
     if (hit) {
       const retryAt = new Date(
-        new Date(hit.checked_in_at).getTime() + + 1 * 60 * 1000
+        new Date(hit.checked_in_at).getTime() + 12 * 60 * 60 * 1000
       ).toISOString();
       return json({ blocked: true, retryAt });
     }
