@@ -40,7 +40,7 @@ export default function GymSearch({
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isVerifying = status === "verifying";
   const isTooFar = status === "too_far";
-  const canVerify = selectedGym != null && selectedGym.distanceM <= 200;
+  const canVerify = selectedGym != null && selectedGym.distanceM <= 152;
 
   // Debounce search on query change (skip initial mount — already triggered by checkIn)
   const mounted = useRef(false);
@@ -138,7 +138,7 @@ export default function GymSearch({
           )}
 
           {isTooFar && (
-            <p className="text-red-400 text-xs text-center">{`Server rejected: you're > 200m away`}</p>
+            <p className="text-red-400 text-xs text-center">{`Server rejected: you're > 500ft away`}</p>
           )}
         </div>
       )}

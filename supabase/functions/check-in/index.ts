@@ -47,7 +47,7 @@ Deno.serve(async (req) => {
 
     // Haversine check — reject before burning rate limit slot
     const distanceM = haversineMeters(lat, lng, gymLat, gymLng);
-    if (distanceM > 200) {
+    if (distanceM > 152) {
       return json({ verified: false, distanceM: Math.round(distanceM) });
     }
 
