@@ -18,12 +18,15 @@ function msUntilReset(): number {
 }
 
 export default function CountdownTimer() {
-  const [ms, setMs] = useState(msUntilReset);
+  const [ms, setMs] = useState<number | null>(null);
 
   useEffect(() => {
+    setMs(msUntilReset());
     const id = setInterval(() => setMs(msUntilReset()), 60000);
     return () => clearInterval(id);
   }, []);
+
+  if (ms === null) return <div className="text-xs text-[#555]">· resets Sunday midnight PT</div>;
 
   const d = Math.floor(ms / 86400000);
   const h = Math.floor((ms % 86400000) / 3600000);
